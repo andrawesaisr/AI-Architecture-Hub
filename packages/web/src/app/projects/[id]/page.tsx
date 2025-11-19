@@ -21,6 +21,8 @@ import {
 
 import { fetchWithAuth } from '@/lib/api';
 import { FolderTree } from '@/components/FolderTree';
+import { ValidationPanel } from '@/components/ValidationPanel';
+import { ArchitectureDiagrams } from '@/components/ArchitectureDiagrams';
 
 interface ProjectWithRelations extends Project {
   collaborators?: Array<{ id: string; role: string; user?: { email: string } }>;
@@ -435,6 +437,27 @@ export default function ProjectDetail({ params }: { params: { id: string } }) {
     }
   };
 
+  const handleValidate = async () => {
+    const response = await fetchWithAuth(`/projects/${params.id}/validate`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      throw new Error('Validation failed');
+    }
+    return await response.json();
+  };
+
+  const handleApplyAutoFix = async (suggestionId: string) => {
+    const response = await fetchWithAuth(`/projects/${params.id}/apply-autofix`, {
+      method: 'POST',
+      body: JSON.stringify({ suggestionId }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to apply auto-fix');
+    }
+    await reloadProject();
+  };
+
   if (isLoading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-950 text-white">
@@ -541,10 +564,17 @@ export default function ProjectDetail({ params }: { params: { id: string } }) {
               onSuggest={handleFeatureSuggestions}
             />
             <FolderStructurePanel spec={spec} />
+            <ArchitectureDiagrams spec={spec} />
+            <CodeGenerationPanel projectId={params.id} entities={spec.entities} />
             <SpecPreview spec={spec} />
           </div>
 
           <aside className="space-y-8 min-w-0">
+            <ValidationPanel
+              projectId={params.id}
+              onValidate={handleValidate}
+              onApplyFix={handleApplyAutoFix}
+            />
             <PreviewPanel preview={preview} />
             <FeatureList features={project.features} />
             <VersionList versions={versions} onViewDiff={handleViewDiff} />
@@ -1185,6 +1215,148 @@ function FolderStructurePanel({ spec }: { spec: Spec }) {
       <p className="mt-1 text-sm text-slate-400">Project scaffolding and file organization</p>
       <div className="mt-4 rounded-md border border-slate-800 bg-slate-950 p-4">
         <FolderTree structure={spec.folder_structure} />
+      </div>
+    </section>
+  );
+}
+
+function CodeGenerationPanel({ projectId, entities }: { projectId: string; entities: Entity[] }) {
+  const [selectedEntity, setSelectedEntity] = useState<string>('');
+  const [generationType, setGenerationType] = useState<'service' | 'tests' | 'component'>('service');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedCode, setGeneratedCode] = useState<string>('');
+
+  const handleGenerate = async () => {
+    if (!selectedEntity) {
+      alert('Please select an entity');
+      return;
+    }
+
+    setIsGenerating(true);
+    try {
+      const response = await fetchWithAuth(
+        `/projects/${projectId}/generate/${generationType}/${selectedEntity}`,
+        { method: 'POST' }
+      );
+      if (!response.ok) throw new Error('Generation failed');
+      const code = await response.text();
+      setGeneratedCode(code);
+    } catch (err) {
+      alert('Failed to generate code');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleGenerateAll = async () => {
+    setIsGenerating(true);
+    try {
+      const response = await fetchWithAuth(`/projects/${projectId}/generate/all`, {
+        method: 'POST',
+      });
+      if (!response.ok) throw new Error('Generation failed');
+      const data = await response.json();
+      alert(`Generated ${data.count} files successfully!`);
+    } catch (err) {
+      alert('Failed to generate all files');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleDownload = () => {
+    if (!generatedCode) return;
+    const blob = new Blob([generatedCode], { type: 'text/plain' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${selectedEntity}-${generationType}.${generationType === 'component' ? 'tsx' : 'ts'}`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  };
+
+  return (
+    <section className="rounded-lg border border-slate-800 bg-slate-900 p-6 shadow-lg">
+      <h2 className="text-lg font-semibold">⚡ Code Generation</h2>
+      <p className="mt-1 text-sm text-slate-400">
+        Generate service logic, tests, and frontend components
+      </p>
+
+      <div className="mt-4 space-y-4">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-sm font-medium text-slate-300">Entity</label>
+            <select
+              value={selectedEntity}
+              onChange={(e) => setSelectedEntity(e.target.value)}
+              className="w-full rounded-md border border-slate-700 bg-slate-800 p-2 text-white focus:border-sky-500 focus:outline-none"
+            >
+              <option value="">Select entity...</option>
+              {entities.map((entity) => (
+                <option key={entity.id} value={entity.id}>
+                  {entity.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-sm font-medium text-slate-300">Type</label>
+            <select
+              value={generationType}
+              onChange={(e) => setGenerationType(e.target.value as any)}
+              className="w-full rounded-md border border-slate-700 bg-slate-800 p-2 text-white focus:border-sky-500 focus:outline-none"
+            >
+              <option value="service">Service Logic</option>
+              <option value="tests">Unit Tests</option>
+              <option value="component">Frontend Component</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={handleGenerate}
+            disabled={isGenerating || !selectedEntity}
+            className="rounded-md border border-emerald-600 px-4 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-600/10 disabled:opacity-50"
+          >
+            {isGenerating ? 'Generating...' : '⚡ Generate Code'}
+          </button>
+          <button
+            onClick={handleGenerateAll}
+            disabled={isGenerating}
+            className="rounded-md border border-purple-600 px-4 py-2 text-sm font-semibold text-purple-300 hover:bg-purple-600/10 disabled:opacity-50"
+          >
+            {isGenerating ? 'Generating...' : '🚀 Generate All'}
+          </button>
+          {generatedCode && (
+            <button
+              onClick={handleDownload}
+              className="rounded-md border border-sky-600 px-4 py-2 text-sm font-semibold text-sky-300 hover:bg-sky-600/10"
+            >
+              📥 Download
+            </button>
+          )}
+        </div>
+
+        {generatedCode && (
+          <div className="rounded-md border border-slate-800 bg-slate-950 p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-300">Generated Code</h3>
+              <button
+                onClick={() => navigator.clipboard.writeText(generatedCode)}
+                className="text-xs text-sky-400 hover:text-sky-300"
+              >
+                📋 Copy
+              </button>
+            </div>
+            <pre className="max-h-96 overflow-auto text-xs text-slate-300">
+              <code>{generatedCode}</code>
+            </pre>
+          </div>
+        )}
       </div>
     </section>
   );

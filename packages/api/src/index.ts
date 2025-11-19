@@ -19,6 +19,8 @@ import { ChangeOperation, ChangeRequest, Spec } from '@ai-architecture-hub/core'
 import { collectImpactedFiles, computeChangePreview, generateImpactSummary } from './update-engine';
 import { enrichSpecWithAI } from './artefact-generator';
 import { getLocalSuggestions, loadLocalLLMPlugin } from './plugins/local-llm';
+import { validateProjectArchitecture } from './validation-engine';
+import { generateServiceLogic, generateTests, generateFrontendComponent } from './code-generator';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
@@ -544,6 +546,20 @@ app.get('/projects/:id/export/cursor', authenticateJWT, async (req: AuthRequest,
   res.type('text/plain').send(bundle);
 });
 
+app.get('/projects/:id/export/windsurf', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  const project = await getProjectWithAccess(req.params.id, req.user!.userId);
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  const spec = parseSpec(project.spec);
+  const enrichedSpec = ensureSpecFeatures(spec, project.features);
+
+  const specForPrompt = { ...enrichedSpec, stack: project.stack } as Spec;
+  const bundle = generateCursorPromptBundle(specForPrompt); // Reuse Cursor format for now
+  res.type('text/plain').send(bundle);
+});
+
 // Version history ---------------------------------------------------------
 
 app.get('/projects/:id/versions', authenticateJWT, async (req: AuthRequest, res: Response) => {
@@ -807,6 +823,131 @@ app.patch('/projects/:id/adrs/:adrId', authenticateJWT, async (req: AuthRequest,
   });
 
   res.json(updated);
+});
+
+// Validation --------------------------------------------------------------
+
+app.post('/projects/:id/validate', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  const project = await getProjectWithAccess(req.params.id, req.user!.userId);
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  const spec = parseSpec(project.spec);
+  const validationResult = validateProjectArchitecture(spec);
+  res.json(validationResult);
+});
+
+app.post('/projects/:id/apply-autofix', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const { suggestionId } = req.body;
+  
+  const project = await getProjectWithAccess(id, req.user!.userId);
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  if (!ensureUserOwnsLock(project, req.user!.userId)) {
+    return res.status(423).json({ error: 'Project locked by another collaborator' });
+  }
+
+  const spec = parseSpec(project.spec);
+  const validationResult = validateProjectArchitecture(spec);
+  const suggestion = validationResult.suggestions.find(s => s.id === suggestionId);
+
+  if (!suggestion) {
+    return res.status(404).json({ error: 'Suggestion not found' });
+  }
+
+  if (!suggestion.autoFixable || !suggestion.changeRequest) {
+    return res.status(400).json({ error: 'This suggestion is not auto-fixable' });
+  }
+
+  const result = await applyChangeRequest(project, suggestion.changeRequest, req.user!.userId, {
+    persist: true,
+  });
+
+  if (result.status === 'conflict') {
+    return res.status(409).json(result.payload);
+  }
+
+  res.json(result.payload);
+});
+
+// Code Generation ---------------------------------------------------------
+
+app.post('/projects/:id/generate/service/:entityId', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  const project = await getProjectWithAccess(req.params.id, req.user!.userId);
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  const spec = parseSpec(project.spec);
+  const entity = spec.entities.find(e => e.id === req.params.entityId);
+  if (!entity) {
+    return res.status(404).json({ error: 'Entity not found' });
+  }
+
+  const serviceCode = generateServiceLogic(entity, project.stack);
+  res.type('text/plain').send(serviceCode);
+});
+
+app.post('/projects/:id/generate/tests/:entityId', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  const project = await getProjectWithAccess(req.params.id, req.user!.userId);
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  const spec = parseSpec(project.spec);
+  const entity = spec.entities.find(e => e.id === req.params.entityId);
+  if (!entity) {
+    return res.status(404).json({ error: 'Entity not found' });
+  }
+
+  const testCode = generateTests(entity, project.stack);
+  res.type('text/plain').send(testCode);
+});
+
+app.post('/projects/:id/generate/component/:entityId', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  const project = await getProjectWithAccess(req.params.id, req.user!.userId);
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  const spec = parseSpec(project.spec);
+  const entity = spec.entities.find(e => e.id === req.params.entityId);
+  if (!entity) {
+    return res.status(404).json({ error: 'Entity not found' });
+  }
+
+  const componentCode = generateFrontendComponent(entity);
+  res.type('text/plain').send(componentCode);
+});
+
+app.post('/projects/:id/generate/all', authenticateJWT, async (req: AuthRequest, res: Response) => {
+  const project = await getProjectWithAccess(req.params.id, req.user!.userId);
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  const spec = parseSpec(project.spec);
+  const enrichedSpec = ensureSpecFeatures(spec, project.features);
+
+  const generatedFiles: Record<string, string> = {};
+
+  // Generate service logic for each entity
+  for (const entity of enrichedSpec.entities) {
+    const serviceName = `${entity.name.toLowerCase()}.service.ts`;
+    generatedFiles[`services/${serviceName}`] = generateServiceLogic(entity, project.stack);
+    
+    const testName = `${entity.name.toLowerCase()}.service.test.ts`;
+    generatedFiles[`tests/${testName}`] = generateTests(entity, project.stack);
+    
+    const componentName = `${entity.name}List.tsx`;
+    generatedFiles[`components/${componentName}`] = generateFrontendComponent(entity);
+  }
+
+  res.json({ files: generatedFiles, count: Object.keys(generatedFiles).length });
 });
 
 // Local LLM integration ---------------------------------------------------
