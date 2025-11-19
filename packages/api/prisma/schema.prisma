@@ -1,0 +1,161 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id          String    @id @default(cuid())
+  name        String
+  stack       String
+  architectureStyle String @default("Modular")
+  description String
+  spec        Json
+  versions    Version[]
+  features    Feature[]
+  adrs        ADR[]
+  invites     ProjectInvite[]
+  reviews     ProjectReview[]
+  collaborators ProjectCollaborator[]
+  lock        ProjectLock?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  user        User      @relation(fields: [userId], references: [id])
+  userId      String
+}
+
+model Version {
+  id        String   @id @default(cuid())
+  project   Project  @relation(fields: [projectId], references: [id])
+  projectId String
+  number    Int
+  spec      Json
+  diff      Json
+  createdBy String
+  createdAt DateTime @default(now())
+}
+
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  name      String?
+  password  String
+  projects  Project[]
+  collaborations ProjectCollaborator[]
+  reviews   ProjectReview[]
+}
+
+model Feature {
+  id            String        @id @default(cuid())
+  project       Project       @relation(fields: [projectId], references: [id])
+  projectId     String
+  title         String
+  description   String
+  status        FeatureStatus @default(DRAFT)
+  changeRequest Json
+  preview       Json?
+  createdBy     String
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  reviews       ProjectReview[]
+}
+
+model ProjectInvite {
+  id         String       @id @default(cuid())
+  project    Project      @relation(fields: [projectId], references: [id])
+  projectId  String
+  email      String
+  role       ProjectRole
+  status     InviteStatus @default(PENDING)
+  invitedBy  String
+  token      String       @unique
+  createdAt  DateTime     @default(now())
+  acceptedAt DateTime?
+}
+
+model ProjectReview {
+  id         String       @id @default(cuid())
+  project    Project      @relation(fields: [projectId], references: [id])
+  projectId  String
+  feature    Feature      @relation(fields: [featureId], references: [id])
+  featureId  String
+  reviewer   User         @relation(fields: [reviewerId], references: [id])
+  reviewerId String
+  status     ReviewStatus @default(PENDING)
+  comment    String?
+  createdAt  DateTime     @default(now())
+}
+
+model ProjectCollaborator {
+  id        String      @id @default(cuid())
+  project   Project     @relation(fields: [projectId], references: [id])
+  projectId String
+  user      User        @relation(fields: [userId], references: [id])
+  userId    String
+  role      ProjectRole
+  createdAt DateTime    @default(now())
+
+  @@unique([projectId, userId])
+}
+
+model ProjectLock {
+  id         String   @id @default(cuid())
+  project    Project  @relation(fields: [projectId], references: [id])
+  projectId  String   @unique
+  lockedBy   String
+  lockedAt   DateTime @default(now())
+  expiresAt  DateTime
+}
+
+model ADR {
+  id           String    @id @default(cuid())
+  project      Project   @relation(fields: [projectId], references: [id])
+  projectId    String
+  title        String
+  context      String
+  decision     String
+  consequences String
+  status       ADRStatus @default(PROPOSED)
+  createdBy    String
+  createdAt    DateTime  @default(now())
+}
+
+enum FeatureStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  APPLIED
+  REJECTED
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+enum ProjectRole {
+  OWNER
+  EDITOR
+  REVIEWER
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ADRStatus {
+  PROPOSED
+  ACCEPTED
+  REJECTED
+  SUPERSEDED
+}
