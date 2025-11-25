@@ -124,7 +124,31 @@ function mapApiOverviewToEndpoints(
     console.log('[enrichment] sample API overview item:', JSON.stringify(apiOverview[0], null, 2));
   }
 
-  return apiOverview.map((endpoint) => ({
+  // Filter out invalid endpoints and log warnings
+  const validEndpoints = apiOverview.filter((endpoint, index) => {
+    if (!endpoint) {
+      console.warn(`[enrichment] endpoint at index ${index} is null/undefined`);
+      return false;
+    }
+    if (!endpoint.method) {
+      console.warn(`[enrichment] endpoint at index ${index} missing method:`, JSON.stringify(endpoint, null, 2));
+      return false;
+    }
+    if (!endpoint.path) {
+      console.warn(`[enrichment] endpoint at index ${index} missing path:`, JSON.stringify(endpoint, null, 2));
+      return false;
+    }
+    return true;
+  });
+
+  console.log(`[enrichment] ${validEndpoints.length}/${apiOverview.length} endpoints are valid`);
+
+  if (validEndpoints.length === 0) {
+    console.warn('[enrichment] no valid endpoints found in apiOverview, using fallback');
+    return fallback;
+  }
+
+  return validEndpoints.map((endpoint) => ({
     id: endpoint.id ?? randomUUID(),
     method: endpoint.method,
     path: endpoint.path,

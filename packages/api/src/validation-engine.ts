@@ -48,6 +48,21 @@ export function validateProjectArchitecture(spec: Spec): ValidationResult {
   const warnings: ValidationWarning[] = [];
   const suggestions: AutoFixSuggestion[] = [];
 
+  // Handle null/undefined spec
+  if (!spec) {
+    return {
+      isValid: false,
+      errors: [{ type: 'error', category: 'schema', message: 'Spec is null or undefined', severity: 'critical' }],
+      warnings: [],
+      suggestions: [],
+      summary: { totalIssues: 1, criticalErrors: 1, warnings: 0, autoFixableCount: 0 },
+    };
+  }
+
+  // Ensure spec has required arrays
+  if (!spec.entities) spec.entities = [];
+  if (!spec.endpoints) spec.endpoints = [];
+
   // Run all validation checks
   errors.push(...validateEntities(spec));
   errors.push(...validateEndpoints(spec));
@@ -83,7 +98,14 @@ function validateEntities(spec: Spec): ValidationError[] {
   const errors: ValidationError[] = [];
   const entityNames = new Set<string>();
 
+  // Handle empty entities array
+  if (!spec.entities || spec.entities.length === 0) {
+    return errors;
+  }
+
   for (const entity of spec.entities) {
+    // Skip if entity is invalid
+    if (!entity || !entity.name) continue;
     // Check for duplicate entity names
     if (entityNames.has(entity.name)) {
       errors.push({
@@ -169,9 +191,16 @@ function validateEntities(spec: Spec): ValidationError[] {
  */
 function validateEndpoints(spec: Spec): ValidationError[] {
   const errors: ValidationError[] = [];
-  const endpointPaths = new Map<string, string[]>();
+  const endpointKeys = new Set<string>();
+
+  // Handle empty endpoints array
+  if (!spec.endpoints || spec.endpoints.length === 0) {
+    return errors;
+  }
 
   for (const endpoint of spec.endpoints) {
+    // Skip if endpoint is invalid
+    if (!endpoint || !endpoint.method || !endpoint.path) continue;
     // Check for empty path
     if (!endpoint.path || endpoint.path.trim() === '') {
       errors.push({
@@ -197,19 +226,13 @@ function validateEndpoints(spec: Spec): ValidationError[] {
 
     // Check for duplicate endpoint (same method + path)
     const key = `${endpoint.method} ${endpoint.path}`;
-    if (!endpointPaths.has(key)) {
-      endpointPaths.set(key, []);
-    }
-    endpointPaths.get(key)!.push(endpoint.id);
-  }
-
-  // Report duplicates
-  for (const [key, ids] of endpointPaths.entries()) {
-    if (ids.length > 1) {
+    if (!endpointKeys.has(key)) {
+      endpointKeys.add(key);
+    } else {
       errors.push({
         type: 'error',
         category: 'endpoint',
-        message: `Duplicate endpoint: ${key} (found ${ids.length} times)`,
+        message: `Duplicate endpoint: ${key}`,
         severity: 'critical',
       });
     }
@@ -223,10 +246,18 @@ function validateEndpoints(spec: Spec): ValidationError[] {
  */
 function validateEntityRelationships(spec: Spec): ValidationError[] {
   const errors: ValidationError[] = [];
+  
+  // Handle empty entities array
+  if (!spec.entities || spec.entities.length === 0) {
+    return errors;
+  }
+  
   const entityIds = new Set(spec.entities.map(e => e.id));
   const entityNames = new Set(spec.entities.map(e => e.name));
 
   for (const entity of spec.entities) {
+    // Skip if entity has no relations
+    if (!entity.relations || entity.relations.length === 0) continue;
     for (const relation of entity.relations || []) {
       // Check if target entity exists
       if (!entityIds.has(relation.target) && !entityNames.has(relation.target)) {
@@ -264,6 +295,9 @@ function validateEndpointEntityMapping(spec: Spec): ValidationError[] {
   const entityNames = new Set(spec.entities.map(e => e.name.toLowerCase()));
 
   for (const endpoint of spec.endpoints) {
+    // Skip if path is undefined or empty
+    if (!endpoint.path) continue;
+    
     // Extract potential entity name from path (e.g., /api/users -> users)
     const pathParts = endpoint.path.split('/').filter(p => p && !p.startsWith(':'));
     const potentialEntityName = pathParts[pathParts.length - 1]?.toLowerCase();
@@ -291,7 +325,12 @@ function validateEndpointEntityMapping(spec: Spec): ValidationError[] {
 function checkNamingConventions(spec: Spec): ValidationWarning[] {
   const warnings: ValidationWarning[] = [];
 
+  if (!spec.entities || spec.entities.length === 0) {
+    return warnings;
+  }
+
   for (const entity of spec.entities) {
+    if (!entity || !entity.name) continue;
     // Entity names should be PascalCase
     if (entity.name && !/^[A-Z][a-zA-Z0-9]*$/.test(entity.name)) {
       warnings.push({
@@ -317,7 +356,12 @@ function checkNamingConventions(spec: Spec): ValidationWarning[] {
     }
   }
 
+  if (!spec.endpoints) {
+    return warnings;
+  }
+
   for (const endpoint of spec.endpoints) {
+    if (!endpoint || !endpoint.path) continue;
     // Endpoint paths should be lowercase with hyphens
     if (endpoint.path && !/^\/[a-z0-9\-/:]*$/.test(endpoint.path)) {
       warnings.push({
@@ -339,8 +383,13 @@ function checkNamingConventions(spec: Spec): ValidationWarning[] {
 function checkBestPractices(spec: Spec): ValidationWarning[] {
   const warnings: ValidationWarning[] = [];
 
+  if (!spec.entities || spec.entities.length === 0) {
+    return warnings;
+  }
+
   // Check for entities without timestamps
   for (const entity of spec.entities) {
+    if (!entity || !entity.name) continue;
     const hasCreatedAt = entity.fields?.some(f => f.name === 'createdAt');
     const hasUpdatedAt = entity.fields?.some(f => f.name === 'updatedAt');
 
@@ -355,8 +404,13 @@ function checkBestPractices(spec: Spec): ValidationWarning[] {
     }
   }
 
+  if (!spec.endpoints || spec.endpoints.length === 0) {
+    return warnings;
+  }
+
   // Check for GET endpoints without pagination
   for (const endpoint of spec.endpoints) {
+    if (!endpoint || !endpoint.method || !endpoint.path) continue;
     if (endpoint.method === 'GET' && endpoint.path.includes('list') || 
         (endpoint.method === 'GET' && !endpoint.path.includes(':id'))) {
       const schemaStr = JSON.stringify(endpoint.schema || {});
@@ -381,21 +435,31 @@ function checkBestPractices(spec: Spec): ValidationWarning[] {
 function checkMissingCRUDEndpoints(spec: Spec): ValidationWarning[] {
   const warnings: ValidationWarning[] = [];
 
+  if (!spec.entities || spec.entities.length === 0 || !spec.endpoints) {
+    return warnings;
+  }
+
   for (const entity of spec.entities) {
+    if (!entity || !entity.name) continue;
+    
     const entityPath = `/${entity.name.toLowerCase()}s`;
     const entityPathSingular = `/${entity.name.toLowerCase()}`;
 
     const hasCreate = spec.endpoints.some(e => 
+      e && e.method && e.path && 
       e.method === 'POST' && (e.path.includes(entityPath) || e.path.includes(entityPathSingular))
     );
     const hasRead = spec.endpoints.some(e => 
+      e && e.method && e.path &&
       e.method === 'GET' && (e.path.includes(entityPath) || e.path.includes(entityPathSingular))
     );
     const hasUpdate = spec.endpoints.some(e => 
+      e && e.method && e.path &&
       (e.method === 'PUT' || e.method === 'PATCH') && 
       (e.path.includes(entityPath) || e.path.includes(entityPathSingular))
     );
     const hasDelete = spec.endpoints.some(e => 
+      e && e.method && e.path &&
       e.method === 'DELETE' && (e.path.includes(entityPath) || e.path.includes(entityPathSingular))
     );
 

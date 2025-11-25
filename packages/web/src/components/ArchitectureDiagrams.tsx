@@ -217,7 +217,8 @@ function mapRelationType(type: string): string {
 }
 
 function extractEntityFromPath(path: string): string {
-  const parts = path.split('/').filter(p => p && !p.startsWith(':'));
-  const lastPart = parts[parts.length - 1] || 'Resource';
+  const parts = path?.split('/').filter(p => p && !p.startsWith(':'));
+
+  const lastPart = parts?.[parts?.length - 1] || 'Resource';
   return lastPart.charAt(0).toUpperCase() + lastPart.slice(1);
 }
