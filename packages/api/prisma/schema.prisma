@@ -7,7 +7,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model Project {
@@ -41,6 +40,15 @@ model Version {
   createdAt DateTime @default(now())
 }
 
+// IMPORTANT: SUPABASE AUTH INTEGRATION
+// This User model now acts as a "profiles" table. The `id` field MUST be a foreign key
+// referencing `auth.users.id` from Supabase's own authentication schema.
+// 
+// 1. After connecting to your Supabase DB, you must run the following SQL to set up the relationship:
+//    ALTER TABLE "public"."User" ADD CONSTRAINT "User_id_fkey" FOREIGN KEY ("id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
+// 
+// 2. You will also need a trigger to automatically create a new profile when a new user signs up.
+//    Find instructions here: https://supabase.com/docs/guides/auth/managing-user-data
 model User {
   id        String    @id @default(cuid())
   email     String    @unique

@@ -3,7 +3,7 @@
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-import { login, signup } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -13,20 +13,50 @@ export default function LoginPage() {
   const [name, setName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setIsSubmitting(true);
     setError(null);
+    setMessage(null);
 
     try {
       if (mode === 'signup') {
-        await signup(email, password, name);
-      }
+        const { error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            // You can pass additional user metadata if needed
+            data: {
+              name,
+            }
+          }
+        });
 
-      const { token } = await login(email, password);
-      localStorage.setItem('token', token);
-      router.push('/');
+        if (signUpError) {
+          throw signUpError;
+        }
+        
+        setMessage('Signup successful! Please check your email to confirm your account.');
+        // Optionally, reset form and switch to login mode
+        setEmail('');
+        setPassword('');
+        setName('');
+        setMode('login');
+
+      } else { // mode === 'login'
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+
+        if (signInError) {
+          throw signInError;
+        }
+
+        router.push('/projects');
+      }
     } catch (err: any) {
       setError(err.message ?? 'Authentication failed');
     } finally {
@@ -82,6 +112,7 @@ export default function LoginPage() {
             />
           </div>
           {error && <p className="text-sm text-red-400">{error}</p>}
+          {message && <p className="text-sm text-green-400">{message}</p>}
           <button
             type="submit"
             disabled={isSubmitting}
@@ -94,7 +125,11 @@ export default function LoginPage() {
           {mode === 'login' ? 'Need an account?' : 'Already registered?'}{' '}
           <button
             type="button"
-            onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
+            onClick={() => {
+              setMode(mode === 'login' ? 'signup' : 'login');
+              setError(null);
+              setMessage(null);
+            }}
             className="font-semibold text-sky-400 hover:text-sky-300"
           >
             {mode === 'login' ? 'Create one' : 'Sign in'}

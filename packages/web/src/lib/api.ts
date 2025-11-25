@@ -1,12 +1,29 @@
+import { supabase } from './supabase';
+
 export const API_BASE_URL = 'http://localhost:5002';
 
 export async function fetchWithAuth(url: string, options: RequestInit = {}) {
-  const token = localStorage.getItem('token');
-  
+  const { data: { session }, error } = await supabase.auth.getSession();
+
+  if (error) {
+    console.error('Error getting Supabase session:', error);
+    // Potentially handle session error, e.g., by redirecting to login
+    window.location.href = '/login';
+    throw new Error('Could not retrieve authentication session');
+  }
+
+  if (!session) {
+    // No active session, redirect to login
+    window.location.href = '/login';
+    throw new Error('Unauthorized');
+  }
+
+  const token = session.access_token;
+
   const headers = {
     ...options.headers,
     'Content-Type': 'application/json',
-    ...(token && { Authorization: `Bearer ${token}` }),
+    Authorization: `Bearer ${token}`,
   };
 
   const response = await fetch(`${API_BASE_URL}${url}`, {
@@ -15,41 +32,11 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}) {
   });
 
   if (response.status === 401 || response.status === 403) {
-    // Token expired or invalid, redirect to login
-    localStorage.removeItem('token');
+    // The backend API rejected the token. The session might be stale.
+    // Redirecting to login will force a refresh.
     window.location.href = '/login';
-    throw new Error('Unauthorized');
+    throw new Error('Unauthorized: Backend rejected token.');
   }
 
   return response;
-}
-
-export async function login(email: string, password: string) {
-  const response = await fetch(`${API_BASE_URL}/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error ?? 'Failed to login');
-  }
-
-  return response.json();
-}
-
-export async function signup(email: string, password: string, name?: string) {
-  const response = await fetch(`${API_BASE_URL}/signup`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, name }),
-  });
-
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error ?? 'Failed to sign up');
-  }
-
-  return response.json();
 }
